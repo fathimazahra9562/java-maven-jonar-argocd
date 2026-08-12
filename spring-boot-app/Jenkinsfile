@@ -10,13 +10,22 @@ pipeline {
 
         stage('Checkout') {
             steps {
-                sh 'echo "Checkout passed"'
+                sh '''
+                    echo "Checking workspace..."
+                    pwd
+                    ls -la
+
+                    echo "Marking Jenkins workspace as safe for Git..."
+                    git config --global --add safe.directory "${WORKSPACE}"
+
+                    echo "Checking Git..."
+                    git status
+                '''
             }
         }
 
         stage('Build and Test') {
             steps {
-                sh 'ls -ltr'
                 sh '''
                     cd spring-boot-app
                     mvn clean package
@@ -29,10 +38,11 @@ pipeline {
                 withSonarQubeEnv('sonarqube') {
                     sh '''
                         cd spring-boot-app
+
                         mvn org.sonarsource.scanner.maven:sonar-maven-plugin:5.1.0.4751:sonar \
-                        -Dsonar.projectKey=my-ec2-project \
-                        -Dsonar.projectName="Spring Boot App" \
-                        -Dsonar.host.url=$SONAR_HOST_URL
+                            -Dsonar.projectKey=my-ec2-project \
+                            -Dsonar.projectName="Spring Boot App" \
+                            -Dsonar.host.url=$SONAR_HOST_URL
                     '''
                 }
             }
@@ -45,7 +55,10 @@ pipeline {
 
             steps {
                 script {
-                    sh 'docker build -t ${DOCKER_IMAGE} spring-boot-app'
+                    sh '''
+                        cd spring-boot-app
+                        docker build -t ${DOCKER_IMAGE} .
+                    '''
 
                     def dockerImage = docker.image("${DOCKER_IMAGE}")
 
@@ -59,41 +72,66 @@ pipeline {
                 }
             }
         }
-stage('Update Deployment File') {
-    environment {
-        GIT_REPO_NAME = "java-maven-sonar-argocd"
-        GIT_USER_NAME = "fathimazahra9562"
-    }
-    steps {
-        withCredentials([
-            usernamePassword(
-                credentialsId: 'git-hub',
-                usernameVariable: 'GITHUB_USERNAME',
-                passwordVariable: 'GITHUB_TOKEN'
-            )
-        ]) {
-            sh '''
-                rm -rf repo-temp
 
-                git clone https://${GITHUB_USERNAME}:${GITHUB_TOKEN}@github.com/${GIT_USER_NAME}/${GIT_REPO_NAME}.git repo-temp
+        stage('Update Deployment File') {
+            environment {
+                GIT_REPO_NAME = "java-maven-sonar-argocd"
+                GIT_USER_NAME = "fathimazahra9562"
+            }
 
-                cd repo-temp
+            steps {
+                withCredentials([
+                    usernamePassword(
+                        credentialsId: 'git-hub',
+                        usernameVariable: 'GITHUB_USERNAME',
+                        passwordVariable: 'GITHUB_TOKEN'
+                    )
+                ]) {
+                    sh '''
+                        echo "Cleaning old repository..."
+                        rm -rf repo-temp
 
-                git config user.email "fathimazahra9562@gmail.com"
-                git config user.name "${GIT_USER_NAME}"
+                        echo "Cloning GitHub repository..."
 
-                sed -i "s|image: .*|image: fathimazahra7907/spring-boot-app:${BUILD_NUMBER}|g" spring-boot-app-manifests/deployment.yml
+                        git clone https://${GITHUB_USERNAME}:${GITHUB_TOKEN}@github.com/${GIT_USER_NAME}/${GIT_REPO_NAME}.git repo-temp
 
-                git add spring-boot-app-manifests/deployment.yml
+                        cd repo-temp
 
-                git commit -m "Update spring boot image tag to ${BUILD_NUMBER} [skip ci]" || echo "No changes to commit"
+                        echo "Configuring Git..."
 
-                git pull --rebase origin main
+                        git config user.email "fathimazahra9562@gmail.com"
+                        git config user.name "${GIT_USER_NAME}"
 
-                git push origin main
-            '''
+                        echo "Updating deployment image..."
+
+                        sed -i "s|image: .*|image: fathimazahra7907/spring-boot-app:${BUILD_NUMBER}|g" \
+                            spring-boot-app-manifests/deployment.yml
+
+                        echo "Updated deployment file:"
+                        cat spring-boot-app-manifests/deployment.yml
+
+                        echo "Adding deployment file..."
+
+                        git add spring-boot-app-manifests/deployment.yml
+
+                        echo "Committing changes..."
+
+                        git commit \
+                            -m "Update spring boot image tag to ${BUILD_NUMBER} [skip ci]" \
+                            || echo "No changes to commit"
+
+                        echo "Pulling latest changes..."
+
+                        git pull --rebase origin main
+
+                        echo "Pushing changes to GitHub..."
+
+                        git push origin main
+
+                        echo "Deployment file updated successfully!"
+                    '''
+                }
+            }
         }
-    }
-}
     }
 }
